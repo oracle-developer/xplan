@@ -13,8 +13,9 @@ This is a package of pipelined function wrappers over the DBMS_XPLAN reports (DI
 ### 2.2 Standalone Scripts (xplan.display.sql, xplan.display_cursor.sql, xplan.display_awr.sql)
 These are standalone SQL scripts (for SQL*Plus) that simulate the XPLAN functionality but without having to create any database objects. Because they are free-standing SQL scripts, they are more portable, can be added to your SQLPath for instant availability and can be used in more restrictive environments.  See the description in the script headers for more details and usage information. Note that a Tuning and Diagnostics Pack licence is required for the `xplan.display_awr.sql` script as it accesses AWR data.
 
-## 3.0 Disclaimer
-See http://www.oracle-developer.net/disclaimer.php
+## 4.0 License
+This project uses the MIT License.
+See https://github.com/oracle-developer/xplan/blob/master/LICENSE
 
 Adrian Billington
-(c) www.oracle-developer.net
+www.oracle-developer.net
