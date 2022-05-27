@@ -5,19 +5,20 @@
 --
 -- Script:       xplan.display_awr.sql
 --
--- Version:      1.2
+-- Version:      1.3
 --
 -- Author:       Adrian Billington
 --               www.oracle-developer.net
---               (c) oracle-developer.net 
+--               (c) oracle-developer.net
 --
--- Description:  A free-standing SQL wrapper over DBMS_XPLAN. Provides access to the 
+-- Description:  A free-standing SQL wrapper over DBMS_XPLAN. Provides access to the
 --               DBMS_XPLAN.DISPLAY_AWR pipelined function for a given SQL_ID and optional
 --               plan hash value.
 --
 --               The XPLAN utility has one purpose: to include the parent operation ID (PID)
 --               and an execution order column (OID) in the plan output. This makes plan
---               interpretation easier for larger or more complex execution plans.
+--               interpretation easier for larger or more complex execution plans. Version 1.3
+--               has also added the object owner to the output for more clarity.
 --
 --               See the following example for details.
 --
@@ -34,16 +35,16 @@
 --               ------------------------------------------------
 --
 --               Equivalent XPLAN output (format BASIC):
---               ------------------------------------------------------------
---               | Id  | Pid | Ord | Operation                    | Name    |
---               ------------------------------------------------------------
---               |   0 |     |   6 | SELECT STATEMENT             |         |
---               |   1 |   0 |   5 |  MERGE JOIN                  |         |
---               |   2 |   1 |   2 |   TABLE ACCESS BY INDEX ROWID| DEPT    |
---               |   3 |   2 |   1 |    INDEX FULL SCAN           | PK_DEPT |
---               |   4 |   1 |   4 |   SORT JOIN                  |         |
---               |   5 |   4 |   3 |    TABLE ACCESS FULL         | EMP     |
---               ------------------------------------------------------------
+--               ------------------------------------------------------------------
+--               | Id  | Pid | Ord | Operation                    | Name          |
+--               ------------------------------------------------------------------
+--               |   0 |     |   6 | SELECT STATEMENT             |               |
+--               |   1 |   0 |   5 |  MERGE JOIN                  |               |
+--               |   2 |   1 |   2 |   TABLE ACCESS BY INDEX ROWID| SCOTT.DEPT    |
+--               |   3 |   2 |   1 |    INDEX FULL SCAN           | SCOTT.PK_DEPT |
+--               |   4 |   1 |   4 |   SORT JOIN                  |               |
+--               |   5 |   4 |   3 |    TABLE ACCESS FULL         | SCOTT.EMP     |
+--               ------------------------------------------------------------------
 --
 -- Usage:        @xplan.display_awr.sql <sql_id> [plan_hash_value] [plan_format]
 --
@@ -56,11 +57,11 @@
 --                  @xplan.display_awr.sql 9vfvgsk7mtkr4
 --
 --               2) All AWR plans for a SQL_ID with a non-default format
---                  ---------------------------------------------------- 
+--                  ----------------------------------------------------
 --                  @xplan.display_awr.sql 9vfvgsk7mtkr4 "" "basic +projection"
 --
 --               3) AWR plan for a SQL_ID and specific PLAN_HASH_VALUE
---                  -------------------------------------------------- 
+--                  --------------------------------------------------
 --                  @xplan.display_awr.sql 9vfvgsk7mtkr4 63301235
 --
 --               4) AWR plan for a SQL_ID, specific PLAN_HASH_VALUE and non-default format
@@ -80,17 +81,17 @@
 --
 --               2) Access to the DBA_HIST_SQL_PLAN AWR view.
 --
--- Notes:        An XPLAN PL/SQL package is also available. This has wrappers for all of the 
+-- Notes:        An XPLAN PL/SQL package is also available. This has wrappers for all of the
 --               DBMS_XPLAN pipelined functions, but requires the creation of objects.
 --
--- Credits:      1) James Padfield for the hierarchical query to order the plan operations. 
+-- Credits:      1) James Padfield for the hierarchical query to order the plan operations.
 --
 -- Disclaimer:   http://www.oracle-developer.net/disclaimer.php
 --
 -- ----------------------------------------------------------------------------------------------
 
 set define on
-define v_xa_version = 1.2
+define v_xa_version = 1.3
 
 -- Initialise variables 1,2,3 in case they aren't supplied...
 -- ----------------------------------------------------------
@@ -101,7 +102,7 @@ column 3 new_value 3
 select null as "1"
 ,      null as "2"
 ,      null as "3"
-from   dual 
+from   dual
 where  1=2;
 
 -- Define the parameters...
@@ -133,7 +134,7 @@ prompt _ A licence for the Oracle Tuning and Diagnostics Pack is needed to
 prompt _ use this utility. Continue at your own risk: the author accepts
 prompt _ no responsibility for any use of this functionality in an unlicensed
 prompt _ database.
-prompt _ 
+prompt _
 prompt _                   To cancel:   press Ctrl-C
 prompt _                   To continue: press Enter
 prompt _ _____________________________________________________________________
@@ -141,47 +142,50 @@ prompt
 pause
 
 with sql_plan_data as (
-        select id, parent_id, plan_hash_value
+        select id, parent_id, plan_hash_value, object_owner, object_name
         from   dba_hist_sql_plan
         where  sql_id = '&v_xa_sql_id'
         and    plan_hash_value = nvl(&v_xa_plan_hash_value, plan_hash_value)
         and    dbid = &v_xa_dbid
         )
 ,    hierarchy_data as (
-        select  id, parent_id, plan_hash_value
+        select  id, parent_id, plan_hash_value, object_owner, object_name
         from    sql_plan_data
         start   with id = 0
         connect by prior id = parent_id
-               and prior plan_hash_value = plan_hash_value 
+               and prior plan_hash_value = plan_hash_value
         order   siblings by id desc
         )
 ,    ordered_hierarchy_data as (
         select id
-        ,      parent_id as pid
-        ,      plan_hash_value as phv
-        ,      row_number() over (partition by plan_hash_value order by rownum desc) as oid
-        ,      max(id) over (partition by plan_hash_value) as maxid
+        ,      parent_id
+        ,      plan_hash_value
+        ,      object_owner
+        ,      object_name
+        ,      row_number() over (partition by plan_hash_value order by rownum desc) as order_id
+        ,      max(id) over (partition by plan_hash_value) as max_id
         from   hierarchy_data
         )
 ,    xplan_data as (
         select /*+ ordered use_nl(o) */
-               rownum as r
-        ,      x.plan_table_output as plan_table_output
+               x.plan_table_output
         ,      o.id
-        ,      o.pid
-        ,      o.oid
-        ,      o.maxid
-        ,      p.phv
-        ,      count(*) over () as rc
+        ,      o.parent_id
+        ,      o.order_id
+        ,      o.max_id
+        ,      o.object_owner
+        ,      o.object_name
+        ,      p.plan_hash_value
+        ,      count(*) over () as row_count
         from  (
-               select distinct phv
+               select distinct plan_hash_value
                from   ordered_hierarchy_data
               ) p
                cross join
-               table(dbms_xplan.display_awr('&v_xa_sql_id',p.phv,&v_xa_dbid,'&v_xa_format')) x
+               table(dbms_xplan.display_awr('&v_xa_sql_id',p.plan_hash_value,&v_xa_dbid,'&v_xa_format')) x
                left outer join
                ordered_hierarchy_data o
-               on (    o.phv = p.phv
+               on (    o.plan_hash_value = p.plan_hash_value
                    and o.id = case
                                  when regexp_like(x.plan_table_output, '^\|[\* 0-9]+\|')
                                  then to_number(regexp_substr(x.plan_table_output, '[0-9]+'))
@@ -190,42 +194,61 @@ with sql_plan_data as (
 select plan_table_output
 from   xplan_data
 model
-   dimension by (phv, rownum as r)
+   dimension by (plan_hash_value as phv, rownum as r)
    measures (plan_table_output,
              id,
-             maxid,
-             pid,
-             oid,
-             greatest(max(length(maxid)) over () + 3, 6) as csize,
+             max_id as mid,
+             parent_id as pid,
+             order_id as oid,
+             object_owner as owner,
+             object_name as oname,
+             nullif(object_owner || '.', '.') || object_name as ownname,
+             max(length(object_owner || '.' || object_name)) over () as maxownnamelen,
+             max(length(object_owner || '.' || object_name)) over () - max(length(object_name)) over () as ownnamepad,
+             greatest(max(length(max_id)) over () + 3, 6) as csize,
              cast(null as varchar2(128)) as inject,
-             rc)
+             row_count as rc)
    rules sequential order (
           inject[phv,r] = case
                              when id[cv(),cv()+1] = 0
                              or   id[cv(),cv()+3] = 0
-                             or   id[cv(),cv()-1] = maxid[cv(),cv()-1]
-                             then rpad('-', csize[cv(),cv()]*2, '-')
+                             or   id[cv(),cv()-1] = mid[cv(),cv()-1]
+                             then rpad('-', csize[cv(),cv()]*2 + ownnamepad[cv(),cv()], '-')
                              when id[cv(),cv()+2] = 0
                              then '|' || lpad('Pid |', csize[cv(),cv()]) || lpad('Ord |', csize[cv(),cv()])
                              when id[cv(),cv()] is not null
-                             then '|' || lpad(pid[cv(),cv()] || ' |', csize[cv(),cv()]) || lpad(oid[cv(),cv()] || ' |', csize[cv(),cv()]) 
-                          end, 
+                             then '|' || lpad(pid[cv(),cv()] || ' |', csize[cv(),cv()]) || lpad(oid[cv(),cv()] || ' |', csize[cv(),cv()])
+                          end,
           plan_table_output[phv,r] = case
                                         when inject[cv(),cv()] like '---%'
                                         then inject[cv(),cv()] || plan_table_output[cv(),cv()]
                                         when inject[cv(),cv()] is not null
                                         then regexp_replace(plan_table_output[cv(),cv()], '\|', inject[cv(),cv()], 1, 2)
                                         else plan_table_output[cv(),cv()]
-                                     end || 
-                                     case
-                                        when cv(r) = rc[cv(),cv()]
-                                        then chr(10)  ||
-                                             'About'  || chr(10) || 
-                                             '------' || chr(10) ||
-                                             '  - XPlan v&v_xa_version by Adrian Billington (http://www.oracle-developer.net)'
-                                     end
+                                     end,
+          plan_table_output[phv,r] order by r = case
+                                                   when plan_table_output[cv(),cv()] like '|%'
+                                                   then case
+                                                           when id[cv(),cv()+2] = 0
+                                                           then regexp_replace(plan_table_output[cv(),cv()], '(\| Name[ ]+)', '\1' || rpad('  ', ownnamepad[cv(),cv()]))
+                                                           else case
+                                                                   when oname[cv(),cv()] is not null
+                                                                   then regexp_replace(plan_table_output[cv(),cv()], '[^\|]+', rpad(' ' || ownname[cv(),cv()], maxownnamelen[cv(),cv()] + 2), 1, 5)
+                                                                   else regexp_replace(plan_table_output[cv(),cv()], '(\|.)', '\1' || rpad('  ', ownnamepad[cv(),cv()]), 1, 5)
+                                                                end
+                                                        end
+                                                   else plan_table_output[cv(),cv()]
+                                                end ||
+                                                case
+                                                   when cv(r) = rc[cv(),cv()]
+                                                   then chr(10) ||
+                                                        'About'  || chr(10) ||
+                                                        '------' || chr(10) ||
+                                                        '  - XPlan v&v_xa_version by Adrian Billington (http://www.oracle-developer.net)'
+                                                end
          )
 order  by r;
+
 
 -- Teardown...
 -- -----------
